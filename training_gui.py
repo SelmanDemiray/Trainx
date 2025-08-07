@@ -2,19 +2,36 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import numpy as np
 import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolbar2Tk
 import threading
 import os
 import pickle
 from data_loader import load_mnist_data
 from neural_network import NeuralNetwork
-from visualization import show_weights, show_sample_images
+from visualization import (
+    show_weights, show_sample_images, plot_training_curves,
+    plot_confusion_matrix, plot_per_class_accuracy, plot_activation_distribution
+)
+
+class DarkTheme:
+    """Dark theme color scheme for the application."""
+    BG_COLOR = "#1e1e1e"
+    TEXT_COLOR = "#ffffff"
+    ACCENT_COLOR = "#3a3a3a"
+    HIGHLIGHT_COLOR = "#0078d7"
+    BUTTON_BG = "#2d2d2d"
+    BUTTON_FG = "#ffffff"
+    ENTRY_BG = "#2d2d2d"
+    ENTRY_FG = "#ffffff"
+    TAB_BG = "#1e1e1e"
+    TAB_FG = "#ffffff"
+    BORDER_COLOR = "#3a3a3a"
 
 class NeuralNetworkGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("Neural Network Training Interface")
-        self.root.geometry("1000x800")
+        self.root.geometry("1200x800")
         
         self.network = None
         self.train_images = None
@@ -23,7 +40,64 @@ class NeuralNetworkGUI:
         self.test_labels = None
         self.training = False
         
+        self.apply_dark_theme()
         self.setup_gui()
+        
+    def apply_dark_theme(self):
+        """Apply dark theme to the application."""
+        self.root.configure(background=DarkTheme.BG_COLOR)
+        
+        # Configure styles for ttk widgets
+        style = ttk.Style()
+        style.theme_use('clam')  # Use the 'clam' theme as a base
+        
+        # Configure TFrame
+        style.configure("TFrame", background=DarkTheme.BG_COLOR)
+        
+        # Configure TLabel
+        style.configure("TLabel", background=DarkTheme.BG_COLOR, foreground=DarkTheme.TEXT_COLOR)
+        
+        # Configure TButton
+        style.configure("TButton", 
+                       background=DarkTheme.BUTTON_BG, 
+                       foreground=DarkTheme.BUTTON_FG,
+                       borderwidth=1)
+        style.map("TButton",
+                 background=[('active', DarkTheme.HIGHLIGHT_COLOR)],
+                 foreground=[('active', DarkTheme.TEXT_COLOR)])
+        
+        # Configure TEntry
+        style.configure("TEntry", 
+                       fieldbackground=DarkTheme.ENTRY_BG, 
+                       foreground=DarkTheme.ENTRY_FG)
+        
+        # Configure TNotebook
+        style.configure("TNotebook", background=DarkTheme.BG_COLOR, bordercolor=DarkTheme.BORDER_COLOR)
+        style.configure("TNotebook.Tab", background=DarkTheme.TAB_BG, foreground=DarkTheme.TAB_FG,
+                       padding=[10, 5])
+        style.map("TNotebook.Tab",
+                 background=[('selected', DarkTheme.HIGHLIGHT_COLOR)],
+                 foreground=[('selected', DarkTheme.TEXT_COLOR)])
+        
+        # Configure TProgressbar
+        style.configure("TProgressbar", 
+                       background=DarkTheme.HIGHLIGHT_COLOR, 
+                       troughcolor=DarkTheme.ACCENT_COLOR)
+        
+        # Configure TLabelframe
+        style.configure("TLabelframe", 
+                       background=DarkTheme.BG_COLOR, 
+                       foreground=DarkTheme.TEXT_COLOR,
+                       bordercolor=DarkTheme.BORDER_COLOR)
+        style.configure("TLabelframe.Label", 
+                       background=DarkTheme.BG_COLOR, 
+                       foreground=DarkTheme.TEXT_COLOR)
+        
+        # Configure text widgets
+        self.root.option_add("*Text.background", DarkTheme.ENTRY_BG)
+        self.root.option_add("*Text.foreground", DarkTheme.ENTRY_FG)
+        self.root.option_add("*Text.borderwidth", 1)
+        self.root.option_add("*Text.relief", "solid")
         
     def setup_gui(self):
         # Create notebook for tabs
@@ -136,20 +210,53 @@ class NeuralNetworkGUI:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
     
     def setup_visualization_tab(self, parent):
-        # Visualization controls
-        viz_controls = ttk.Frame(parent)
-        viz_controls.pack(pady=10)
+        # Visualization type selection
+        viz_type_frame = ttk.LabelFrame(parent, text="Visualization Type")
+        viz_type_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        ttk.Button(viz_controls, text="Show Sample Images", 
-                  command=self.show_sample_images).pack(side=tk.LEFT, padx=5)
-        ttk.Button(viz_controls, text="Show Weight Visualization", 
-                  command=self.show_weights).pack(side=tk.LEFT, padx=5)
-        ttk.Button(viz_controls, text="Show Training Curves", 
-                  command=self.show_training_curves).pack(side=tk.LEFT, padx=5)
+        # Create a frame for the buttons
+        button_frame = ttk.Frame(viz_type_frame)
+        button_frame.pack(padx=10, pady=10)
         
-        # Matplotlib canvas
-        self.viz_frame = ttk.Frame(parent)
-        self.viz_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        # Create visualization buttons with more options
+        viz_buttons = [
+            ("Sample Images", self.show_embedded_samples),
+            ("Weight Visualization", self.show_embedded_weights),
+            ("Training Curves", self.show_embedded_training_curves),
+            ("Confusion Matrix", self.show_embedded_confusion_matrix),
+            ("Per-Class Accuracy", self.show_embedded_class_accuracy),
+            ("Activation Distribution", self.show_embedded_activations)
+        ]
+        
+        # Arrange buttons in a grid (2 rows, 3 columns)
+        for i, (text, command) in enumerate(viz_buttons):
+            row = i // 3
+            col = i % 3
+            ttk.Button(button_frame, text=text, command=command).grid(row=row, column=col, padx=5, pady=5, sticky="we")
+        
+        # Configure column weights for button_frame
+        for i in range(3):
+            button_frame.columnconfigure(i, weight=1)
+        
+        # Add a save figure button
+        save_frame = ttk.Frame(viz_type_frame)
+        save_frame.pack(fill=tk.X, padx=10, pady=5)
+        
+        ttk.Button(save_frame, text="Save Current Figure", command=self.save_current_figure).pack(side=tk.RIGHT, padx=5)
+        
+        # Canvas for displaying visualizations
+        self.viz_canvas_frame = ttk.Frame(parent)
+        self.viz_canvas_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Instructions label
+        instructions = ttk.Label(self.viz_canvas_frame, 
+                                text="Select a visualization type above to display it here.",
+                                font=('Arial', 10))
+        instructions.pack(expand=True)
+        
+        # This will hold the current matplotlib figure
+        self.current_figure = None
+        self.current_canvas = None
     
     def setup_model_tab(self, parent):
         # Model management
@@ -327,21 +434,159 @@ Dataset path: {folder_path}"""
         if not hasattr(self, 'training_losses'):
             messagebox.showerror("Error", "No training data available")
             return
-            
-        fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 4))
+        plot_training_curves(self.training_losses, self.test_errors)
+    
+    def _clear_viz_frame(self):
+        """Clear the visualization frame before adding a new plot."""
+        for widget in self.viz_canvas_frame.winfo_children():
+            widget.destroy()
+    
+    def _setup_canvas(self, figure):
+        """Set up a matplotlib canvas in the visualization frame."""
+        self._clear_viz_frame()
         
-        ax1.plot(self.training_losses)
-        ax1.set_title('Training Loss')
-        ax1.set_xlabel('Epoch')
-        ax1.set_ylabel('Loss')
+        # Create canvas and toolbar
+        canvas = FigureCanvasTkAgg(figure, self.viz_canvas_frame)
+        canvas.draw()
         
-        ax2.plot([e*100 for e in self.test_errors])
-        ax2.set_title('Test Error')
-        ax2.set_xlabel('Epoch')
-        ax2.set_ylabel('Error (%)')
+        toolbar = NavigationToolbar2Tk(canvas, self.viz_canvas_frame, pack_toolbar=False)
+        toolbar.config(background=DarkTheme.BG_COLOR)
+        for button in toolbar.winfo_children():
+            if isinstance(button, tk.Button):
+                button.config(background=DarkTheme.BUTTON_BG, foreground=DarkTheme.BUTTON_FG)
+        toolbar.update()
         
-        plt.tight_layout()
-        plt.show()
+        toolbar.pack(side=tk.BOTTOM, fill=tk.X)
+        canvas.get_tk_widget().pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        
+        self.current_figure = figure
+        self.current_canvas = canvas
+        
+        return canvas
+    
+    def show_embedded_samples(self):
+        if self.train_images is None:
+            messagebox.showerror("Error", "No dataset loaded")
+            return
+        
+        fig = plt.figure(figsize=(10, 10), facecolor=DarkTheme.BG_COLOR)
+        fig.suptitle("Sample Images from Each Class", color="white", fontsize=16)
+        
+        # Create a grid of subplots
+        axes = []
+        for i in range(10):
+            for j in range(10):
+                ax = fig.add_subplot(10, 10, i*10 + j + 1)
+                ax.axis('off')
+                axes.append(ax)
+        
+        fig = show_sample_images(self.train_images, self.train_labels, fig=fig, ax=np.array(axes).reshape(10, 10))
+        self._setup_canvas(fig)
+    
+    def show_embedded_weights(self):
+        if self.network is None:
+            messagebox.showerror("Error", "No trained network available")
+            return
+        
+        # Calculate grid dimensions
+        n_weights = min(100, self.network.W0.shape[0])  # Show up to 100 weights
+        n_rows = int(np.sqrt(n_weights))
+        n_cols = int(np.ceil(n_weights / n_rows))
+        
+        fig = plt.figure(figsize=(12, 12), facecolor=DarkTheme.BG_COLOR)
+        fig.suptitle("Hidden Layer Weights", color="white", fontsize=16)
+        
+        # Create a grid of subplots
+        axes = []
+        for i in range(n_rows * n_cols):
+            ax = fig.add_subplot(n_rows, n_cols, i + 1)
+            ax.axis('off')
+            axes.append(ax)
+        
+        # Show weights
+        fig = show_weights(self.network.W0[:n_weights], fig=fig, ax=np.array(axes).reshape(n_rows, n_cols))
+        self._setup_canvas(fig)
+    
+    def show_embedded_training_curves(self):
+        if not hasattr(self, 'training_losses'):
+            messagebox.showerror("Error", "No training data available")
+            return
+        
+        fig = plt.figure(figsize=(12, 5), facecolor=DarkTheme.BG_COLOR)
+        
+        # Create two subplots
+        ax1 = fig.add_subplot(1, 2, 1)
+        ax2 = fig.add_subplot(1, 2, 2)
+        
+        fig = plot_training_curves(self.training_losses, self.test_errors, fig=fig, ax=[ax1, ax2])
+        self._setup_canvas(fig)
+    
+    def show_embedded_confusion_matrix(self):
+        if self.network is None or self.test_images is None:
+            messagebox.showerror("Error", "Network or test data not available")
+            return
+        
+        # Get predictions
+        _, test_r1 = self.network.forward_pass(self.test_images)
+        predictions = np.argmax(test_r1, axis=0)
+        
+        fig = plt.figure(figsize=(10, 8), facecolor=DarkTheme.BG_COLOR)
+        ax = fig.add_subplot(1, 1, 1)
+        
+        fig = plot_confusion_matrix(predictions, self.test_labels, fig=fig, ax=ax)
+        self._setup_canvas(fig)
+    
+    def show_embedded_class_accuracy(self):
+        if self.network is None or self.test_images is None:
+            messagebox.showerror("Error", "Network or test data not available")
+            return
+        
+        # Get predictions
+        _, test_r1 = self.network.forward_pass(self.test_images)
+        predictions = np.argmax(test_r1, axis=0)
+        
+        fig = plt.figure(figsize=(10, 5), facecolor=DarkTheme.BG_COLOR)
+        ax = fig.add_subplot(1, 1, 1)
+        
+        fig = plot_per_class_accuracy(predictions, self.test_labels, fig=fig, ax=ax)
+        self._setup_canvas(fig)
+    
+    def show_embedded_activations(self):
+        if self.network is None or self.test_images is None:
+            messagebox.showerror("Error", "Network or test data not available")
+            return
+        
+        # Get hidden layer activations
+        hidden_activations, _ = self.network.forward_pass(self.test_images)
+        
+        fig = plt.figure(figsize=(10, 5), facecolor=DarkTheme.BG_COLOR)
+        ax = fig.add_subplot(1, 1, 1)
+        
+        fig = plot_activation_distribution(hidden_activations, fig=fig, ax=ax)
+        self._setup_canvas(fig)
+    
+    def save_current_figure(self):
+        if self.current_figure is None:
+            messagebox.showerror("Error", "No figure to save")
+            return
+        
+        filepath = filedialog.asksaveasfilename(
+            defaultextension=".png",
+            filetypes=[
+                ("PNG files", "*.png"),
+                ("JPEG files", "*.jpg"),
+                ("PDF files", "*.pdf"),
+                ("SVG files", "*.svg"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        if filepath:
+            try:
+                self.current_figure.savefig(filepath, facecolor=self.current_figure.get_facecolor())
+                messagebox.showinfo("Success", f"Figure saved to {filepath}")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to save figure: {str(e)}")
     
     def save_model(self):
         if self.network is None:
