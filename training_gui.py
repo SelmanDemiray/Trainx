@@ -6,12 +6,15 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg, NavigationToolb
 import threading
 import os
 import pickle
+import datetime
+from PIL import Image, ImageTk
 from data_loader import load_mnist_data
 from neural_network import NeuralNetwork
 from visualization import (
     show_weights, show_sample_images, plot_training_curves,
     plot_confusion_matrix, plot_per_class_accuracy, plot_activation_distribution
 )
+from image_processor import process_image_for_inference
 
 class DarkTheme:
     """Dark theme color scheme for the application."""
@@ -39,6 +42,18 @@ class NeuralNetworkGUI:
         self.test_images = None
         self.test_labels = None
         self.training = False
+        
+        # Add directory for saved models
+        self.models_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trained_saved_networks")
+        if not os.path.exists(self.models_dir):
+            os.makedirs(self.models_dir)
+        
+        # Variable to track loaded dataset name
+        self.dataset_name = "unknown"
+        
+        # For inference
+        self.current_image = None
+        self.processed_image = None
         
         self.apply_dark_theme()
         self.setup_gui()
@@ -123,6 +138,11 @@ class NeuralNetworkGUI:
         model_frame = ttk.Frame(notebook)
         notebook.add(model_frame, text="Model")
         self.setup_model_tab(model_frame)
+        
+        # Inference tab
+        inference_frame = ttk.Frame(notebook)
+        notebook.add(inference_frame, text="Inference")
+        self.setup_inference_tab(inference_frame)
     
     def setup_data_tab(self, parent):
         # Dataset loading section
@@ -277,11 +297,275 @@ class NeuralNetworkGUI:
         self.model_info = tk.Text(model_frame, height=10)
         self.model_info.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
     
+    def setup_inference_tab(self, parent):
+        """Setup the inference tab for digit recognition."""
+        # Create a split layout: left for model selection, right for image and prediction
+        panel = ttk.PanedWindow(parent, orient=tk.HORIZONTAL)
+        panel.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # Left side - Model selection
+        left_frame = ttk.Frame(panel)
+        panel.add(left_frame, weight=1)
+        
+        # Model selection frame
+        model_selection_frame = ttk.LabelFrame(left_frame, text="Model Selection")
+        model_selection_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Refresh button for model list
+        ttk.Button(model_selection_frame, text="Refresh Models", 
+                  command=self.refresh_model_list).pack(pady=5, padx=5, fill=tk.X)
+        
+        # Listbox for models with scrollbar
+        models_frame = ttk.Frame(model_selection_frame)
+        models_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        scrollbar = ttk.Scrollbar(models_frame)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        self.model_listbox = tk.Listbox(models_frame, 
+                                       yscrollcommand=scrollbar.set,
+                                       bg=DarkTheme.ENTRY_BG,
+                                       fg=DarkTheme.TEXT_COLOR,
+                                       selectbackground=DarkTheme.HIGHLIGHT_COLOR)
+        self.model_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar.config(command=self.model_listbox.yview)
+        
+        # Load selected model button
+        ttk.Button(model_selection_frame, text="Load Selected Model", 
+                  command=self.load_model_for_inference).pack(pady=5, padx=5, fill=tk.X)
+        
+        # Model info display
+        model_info_frame = ttk.LabelFrame(left_frame, text="Model Information")
+        model_info_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        self.inference_model_info = tk.Text(model_info_frame, height=10, 
+                                          bg=DarkTheme.ENTRY_BG,
+                                          fg=DarkTheme.TEXT_COLOR)
+        self.inference_model_info.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Right side - Image upload and prediction
+        right_frame = ttk.Frame(panel)
+        panel.add(right_frame, weight=2)
+        
+        # Image display frame
+        image_frame = ttk.LabelFrame(right_frame, text="Image")
+        image_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Canvas for image display
+        self.image_canvas = tk.Canvas(image_frame, 
+                                     bg=DarkTheme.BG_COLOR,
+                                     width=280, 
+                                     height=280,
+                                     highlightbackground=DarkTheme.BORDER_COLOR)
+        self.image_canvas.pack(padx=10, pady=10)
+        
+        # Image controls
+        image_controls = ttk.Frame(image_frame)
+        image_controls.pack(fill=tk.X, padx=5, pady=5)
+        
+        ttk.Button(image_controls, text="Upload Image", 
+                  command=self.upload_image).pack(side=tk.LEFT, padx=5)
+        ttk.Button(image_controls, text="Retry", 
+                  command=self.retry_image).pack(side=tk.LEFT, padx=5)
+        ttk.Button(image_controls, text="Clear", 
+                  command=self.clear_image).pack(side=tk.LEFT, padx=5)
+        
+        # Prediction frame
+        prediction_frame = ttk.LabelFrame(right_frame, text="Prediction")
+        prediction_frame.pack(fill=tk.X, padx=5, pady=5)
+        
+        # Prediction display
+        self.prediction_label = ttk.Label(prediction_frame, 
+                                        text="No prediction yet", 
+                                        font=('Arial', 24, 'bold'))
+        self.prediction_label.pack(pady=10)
+        
+        # Confidence bars frame
+        confidence_frame = ttk.LabelFrame(right_frame, text="Confidence Levels")
+        confidence_frame.pack(fill=tk.BOTH, padx=5, pady=5)
+        
+        # Create progress bars for each digit
+        self.confidence_bars = []
+        self.confidence_labels = []
+        
+        for i in range(10):
+            digit_frame = ttk.Frame(confidence_frame)
+            digit_frame.pack(fill=tk.X, padx=5, pady=2)
+            
+            ttk.Label(digit_frame, text=f"Digit {i}:", width=8).pack(side=tk.LEFT)
+            
+            bar = ttk.Progressbar(digit_frame, length=200, maximum=100)
+            bar.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+            self.confidence_bars.append(bar)
+            
+            label = ttk.Label(digit_frame, text="0%", width=6)
+            label.pack(side=tk.LEFT)
+            self.confidence_labels.append(label)
+        
+        # Initially refresh the model list
+        self.refresh_model_list()
+
+    def refresh_model_list(self):
+        """Refresh the list of available models."""
+        self.model_listbox.delete(0, tk.END)
+        
+        if os.path.exists(self.models_dir):
+            models = [f for f in os.listdir(self.models_dir) if f.endswith('.npz')]
+            for model in sorted(models):
+                self.model_listbox.insert(tk.END, model)
+    
+    def load_model_for_inference(self):
+        """Load the selected model for inference."""
+        if self.model_listbox.curselection():
+            model_name = self.model_listbox.get(self.model_listbox.curselection())
+            model_path = os.path.join(self.models_dir, model_name)
+            
+            try:
+                self.network = NeuralNetwork()
+                self.network.load_model(model_path)
+                
+                # Update model info
+                self.inference_model_info.delete(1.0, tk.END)
+                model_info = f"Model: {model_name}\n\n"
+                model_info += f"Hidden units: {self.network.W0.shape[0]}\n"
+                model_info += f"Input features: {self.network.W0.shape[1]}\n"
+                model_info += f"Output classes: {self.network.W1.shape[0]}\n"
+                
+                # Try to parse more information from filename
+                try:
+                    parts = model_name.split('_')
+                    if len(parts) >= 4:
+                        dataset = parts[0]
+                        nhid = parts[1].replace('nhid', '')
+                        lr = parts[2].replace('lr', '')
+                        date = parts[3].split('.')[0]
+                        
+                        model_info += f"\nDataset: {dataset}\n"
+                        model_info += f"Hidden units: {nhid}\n"
+                        model_info += f"Learning rate: {lr}\n"
+                        model_info += f"Date: {date}\n"
+                except:
+                    pass
+                    
+                self.inference_model_info.insert(tk.END, model_info)
+                messagebox.showinfo("Success", f"Model '{model_name}' loaded successfully")
+                
+                # If an image is already loaded, predict again
+                if self.processed_image is not None:
+                    self.predict_digit()
+                
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load model: {str(e)}")
+    
+    def upload_image(self):
+        """Upload an image for digit recognition."""
+        file_path = filedialog.askopenfilename(
+            title="Select Image",
+            filetypes=[
+                ("Image files", "*.png;*.jpg;*.jpeg;*.bmp;*.gif"),
+                ("All files", "*.*")
+            ]
+        )
+        
+        if file_path:
+            try:
+                # Load and display the image
+                self.current_image = Image.open(file_path)
+                self.display_image(self.current_image)
+                
+                # Process the image for inference
+                self.processed_image = process_image_for_inference(self.current_image)
+                
+                # Predict if a model is loaded
+                if self.network is not None:
+                    self.predict_digit()
+                else:
+                    messagebox.showinfo("No Model", "Please load a model first to make predictions")
+                    
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load image: {str(e)}")
+    
+    def display_image(self, image):
+        """Display an image on the canvas."""
+        # Clear canvas
+        self.image_canvas.delete("all")
+        
+        # Resize image to fit canvas while maintaining aspect ratio
+        canvas_width = 280
+        canvas_height = 280
+        
+        # Calculate dimensions
+        img_width, img_height = image.size
+        ratio = min(canvas_width/img_width, canvas_height/img_height)
+        new_width = int(img_width * ratio)
+        new_height = int(img_height * ratio)
+        
+        # Resize and convert image for display
+        resized_img = image.resize((new_width, new_height), Image.Resampling.LANCZOS)
+        self.tk_image = ImageTk.PhotoImage(resized_img)
+        
+        # Calculate position to center the image
+        x = (canvas_width - new_width) // 2
+        y = (canvas_height - new_height) // 2
+        
+        # Display image on canvas
+        self.image_canvas.create_image(x, y, anchor=tk.NW, image=self.tk_image)
+    
+    def retry_image(self):
+        """Retry prediction with current image."""
+        if self.processed_image is not None and self.network is not None:
+            self.predict_digit()
+        else:
+            messagebox.showinfo("Missing Data", "Please load both an image and a model first")
+    
+    def clear_image(self):
+        """Clear the current image."""
+        self.image_canvas.delete("all")
+        self.current_image = None
+        self.processed_image = None
+        self.prediction_label.config(text="No prediction yet")
+        
+        # Reset confidence bars
+        for i in range(10):
+            self.confidence_bars[i]['value'] = 0
+            self.confidence_labels[i].config(text="0%")
+    
+    def predict_digit(self):
+        """Make a prediction on the processed image."""
+        if self.network is None:
+            messagebox.showinfo("No Model", "Please load a model first")
+            return
+            
+        if self.processed_image is None:
+            messagebox.showinfo("No Image", "Please upload an image first")
+            return
+        
+        try:
+            # Get prediction
+            prediction, probabilities = self.network.predict_single(self.processed_image)
+            
+            # Update prediction label
+            self.prediction_label.config(text=f"Predicted Digit: {prediction}")
+            
+            # Update confidence bars
+            for i in range(10):
+                confidence = probabilities[i] * 100
+                self.confidence_bars[i]['value'] = confidence
+                self.confidence_labels[i].config(text=f"{confidence:.1f}%")
+                
+        except Exception as e:
+            messagebox.showerror("Error", f"Prediction failed: {str(e)}")
+    
     def load_dataset(self):
         folder_path = filedialog.askdirectory(title="Select MNIST Dataset Folder")
         if folder_path:
             try:
                 self.train_images, self.train_labels, self.test_images, self.test_labels = load_mnist_data(folder_path)
+                
+                # Store dataset name - extract from folder path
+                self.dataset_name = os.path.basename(folder_path)
+                if not self.dataset_name:  # If it's the root directory
+                    self.dataset_name = "mnist"
                 
                 # Verify data is loaded correctly
                 if self.train_labels.shape[0] != 10 or self.test_labels.shape[0] != 10:
@@ -592,15 +876,22 @@ Dataset path: {folder_path}"""
         if self.network is None:
             messagebox.showerror("Error", "No trained network to save")
             return
-            
-        filepath = filedialog.asksaveasfilename(
-            defaultextension=".npz",
-            filetypes=[("NumPy files", "*.npz"), ("All files", "*.*")]
-        )
-        if filepath:
+        
+        # Create a meaningful filename with timestamp
+        timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        nhid = self.network.nhid
+        lr = str(self.network.learning_rate).replace('.', 'p')
+        
+        filename = f"{self.dataset_name}_nhid{nhid}_lr{lr}_{timestamp}.npz"
+        filepath = os.path.join(self.models_dir, filename)
+        
+        try:
             self.network.save_model(filepath)
-            messagebox.showinfo("Success", "Model saved successfully")
-    
+            messagebox.showinfo("Success", f"Model saved as: {filename}")
+            self.refresh_model_list()  # Refresh model list in inference tab
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to save model: {str(e)}")
+
     def load_model(self):
         filepath = filedialog.askopenfilename(
             filetypes=[("NumPy files", "*.npz"), ("All files", "*.*")]

@@ -118,3 +118,43 @@ class NeuralNetwork:
         self.W1 = data['W1']
         self.b0 = data['b0']
         self.b1 = data['b1']
+        
+    def predict(self, images):
+        """
+        Predict classes for input images.
+        
+        Args:
+            images: Input images as numpy array (784 x n_samples)
+            
+        Returns:
+            predictions: Predicted class labels
+            probabilities: Output probabilities for each class
+        """
+        # Ensure correct input shape
+        if images.ndim == 1:
+            images = images.reshape(-1, 1)
+        
+        # Forward pass
+        r0, r1 = self.forward_pass(images)
+        
+        # Get predictions
+        predictions = np.argmax(r1, axis=0)
+        
+        return predictions, r1
+    
+    def predict_single(self, image):
+        """
+        Predict class for a single image.
+        
+        Args:
+            image: Single image as a 784-element numpy array
+            
+        Returns:
+            prediction: Predicted class label
+            probabilities: Output probabilities for each class
+        """
+        if image.shape != (784,):
+            raise ValueError(f"Image must be flattened to 784 features, got {image.shape}")
+        
+        predictions, probabilities = self.predict(image.reshape(-1, 1))
+        return predictions[0], probabilities[:, 0]

@@ -41,10 +41,24 @@ class InferenceModel:
     def predict_single(self, image):
         """Predict class for a single image."""
         if image.shape != (784,):
-            raise ValueError("Image must be flattened to 784 features")
+            raise ValueError(f"Image must be flattened to 784 features, got {image.shape}")
         
         predictions, probabilities = self.predict(image.reshape(-1, 1))
         return predictions[0], probabilities[:, 0]
+
+    def preprocess_image(self, image_path):
+        """
+        Preprocess an image file for inference.
+        This method is a convenience wrapper for external image preprocessing.
+        
+        Args:
+            image_path: Path to image file
+            
+        Returns:
+            processed_image: Numpy array ready for inference
+        """
+        from image_processor import process_image_cv2
+        return process_image_cv2(image_path)
 
 # Example usage
 if __name__ == "__main__":
