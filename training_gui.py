@@ -563,18 +563,57 @@ Number of classes: {self.train_labels.shape[0]}"""
                                         font=('Arial', 24, 'bold'))
         self.prediction_label.pack(pady=10)
         
-        # Confidence bars frame
+        # Confidence bars frame - with scrolling capability
         confidence_frame = ttk.LabelFrame(right_frame, text="Confidence Levels")
-        confidence_frame.pack(fill=tk.BOTH, padx=5, pady=5)
-
-        # Create progress bars container and build initially for 10 classes
-        self.confidence_container = confidence_frame
+        confidence_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        
+        # Create a canvas and scrollbar for scrolling
+        confidence_canvas = tk.Canvas(confidence_frame, 
+                                     bg=DarkTheme.BG_COLOR,
+                                     highlightthickness=0)
+        scrollbar = ttk.Scrollbar(confidence_frame, orient="vertical", 
+                                 command=confidence_canvas.yview)
+        
+        # Create frame inside canvas that will contain the confidence bars
+        scrollable_frame = ttk.Frame(confidence_canvas)
+        scrollable_frame.bind(
+            "<Configure>",
+            lambda e: confidence_canvas.configure(
+                scrollregion=confidence_canvas.bbox("all")
+            )
+        )
+        
+        # Place the scrollable frame in the canvas
+        confidence_canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+        confidence_canvas.configure(yscrollcommand=scrollbar.set)
+        
+        # Pack the canvas and scrollbar
+        confidence_canvas.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5, pady=5)
+        scrollbar.pack(side=tk.RIGHT, fill=tk.Y, pady=5)
+        
+        # Store references to the scrollable components
+        self.confidence_container = scrollable_frame
+        self.confidence_canvas = confidence_canvas
+        
+        # Mouse wheel scrolling
+        confidence_canvas.bind_all("<MouseWheel>", self._on_mousewheel)
+        
+        # Build initial confidence bars for 10 classes
         self.confidence_bars = []
         self.confidence_labels = []
         self._rebuild_confidence_bars(10)
 
         # Initially refresh the model list
         self.refresh_model_list()
+        
+    def _on_mousewheel(self, event):
+        """Handle mouse wheel scrolling in the confidence canvas."""
+        # Only scroll if mouse is over the confidence canvas
+        widget = self.root.winfo_containing(event.x_root, event.y_root)
+        if "confidence_canvas" in str(widget) or widget in self.confidence_bars:
+            # Windows and MacOS have different event.delta directions
+            if event.delta:
+                self.confidence_canvas.yview_scroll(int(-1*(event.delta/120)), "units")
 
     def _rebuild_confidence_bars(self, num_classes: int, dataset_name="unknown"):
         """Rebuild the confidence bars to match the number of classes."""
@@ -603,6 +642,10 @@ Number of classes: {self.train_labels.shape[0]}"""
             label = ttk.Label(row, text="0%", width=6)
             label.pack(side=tk.LEFT)
             self.confidence_labels.append(label)
+            
+        # Update the canvas's scroll region
+        self.confidence_canvas.update_idletasks()
+        self.confidence_canvas.configure(scrollregion=self.confidence_canvas.bbox("all"))
 
     def refresh_model_list(self):
         """Refresh the list of available models."""
