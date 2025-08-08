@@ -19,6 +19,7 @@ from visualization import (
 )
 from image_processor import process_image_for_inference
 from dataset_downloader import DatasetDownloader
+from dataset_classes import get_class_name
 
 class DarkTheme:
     """Dark theme color scheme for the application."""
@@ -575,7 +576,7 @@ Number of classes: {self.train_labels.shape[0]}"""
         # Initially refresh the model list
         self.refresh_model_list()
 
-    def _rebuild_confidence_bars(self, num_classes: int):
+    def _rebuild_confidence_bars(self, num_classes: int, dataset_name="unknown"):
         """Rebuild the confidence bars to match the number of classes."""
         if self.confidence_container is None:
             return
@@ -591,7 +592,9 @@ Number of classes: {self.train_labels.shape[0]}"""
             row = ttk.Frame(self.confidence_container)
             row.pack(fill=tk.X, padx=5, pady=2)
 
-            ttk.Label(row, text=f"Class {i}:", width=10).pack(side=tk.LEFT)
+            # Get class name based on dataset
+            class_name = get_class_name(dataset_name, i)
+            ttk.Label(row, text=f"{class_name}:", width=20).pack(side=tk.LEFT)
 
             bar = ttk.Progressbar(row, length=200, maximum=100)
             bar.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
@@ -627,6 +630,10 @@ Number of classes: {self.train_labels.shape[0]}"""
                 model_info += f"Input features: {self.network.W0.shape[1]}\n"
                 model_info += f"Output classes: {self.network.W1.shape[0]}\n"
                 
+                # Display dataset name if available
+                dataset_name = getattr(self.network, 'dataset_name', "unknown")
+                model_info += f"Dataset: {dataset_name}\n"
+                
                 # Try to parse more information from filename
                 try:
                     parts = model_name.split('_')
@@ -636,7 +643,11 @@ Number of classes: {self.train_labels.shape[0]}"""
                         lr = parts[2].replace('lr', '')
                         date = parts[3].split('.')[0]
                         
-                        model_info += f"\nDataset: {dataset}\n"
+                        if dataset_name == "unknown":
+                            dataset_name = dataset
+                        
+                        model_info += f"\nFilename info:\n"
+                        model_info += f"Dataset: {dataset}\n"
                         model_info += f"Hidden units: {nhid}\n"
                         model_info += f"Learning rate: {lr}\n"
                         model_info += f"Date: {date}\n"
@@ -646,12 +657,15 @@ Number of classes: {self.train_labels.shape[0]}"""
                 self.inference_model_info.insert(tk.END, model_info)
                 messagebox.showinfo("Success", f"Model '{model_name}' loaded successfully")
 
+                # Store the dataset name for use in prediction
+                self.inference_dataset_name = dataset_name
+
                 # Rebuild confidence bars to match model's output classes
                 try:
                     n_classes = int(self.network.W1.shape[0])
-                    self._rebuild_confidence_bars(n_classes)
-                except Exception:
-                    pass
+                    self._rebuild_confidence_bars(n_classes, dataset_name)
+                except Exception as e:
+                    print(f"Error rebuilding confidence bars: {e}")
 
                 # If an image is already loaded, predict again
                 if self.processed_image is not None:
@@ -659,7 +673,7 @@ Number of classes: {self.train_labels.shape[0]}"""
                 
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load model: {str(e)}")
-    
+
     def upload_image(self):
         """Upload an image for digit recognition."""
         file_path = filedialog.askopenfilename(
@@ -747,13 +761,21 @@ Number of classes: {self.train_labels.shape[0]}"""
             # Get prediction
             prediction, probabilities = self.network.predict_single(self.processed_image)
 
+            # Get dataset name from the network or use default
+            dataset_name = getattr(self.network, 'dataset_name', "unknown")
+            if hasattr(self, 'inference_dataset_name'):
+                dataset_name = self.inference_dataset_name
+            
+            # Get class name based on dataset
+            class_name = get_class_name(dataset_name, prediction)
+
             # Rebuild bars if class count changed
             n_classes = int(probabilities.shape[0])
             if len(self.confidence_bars) != n_classes:
-                self._rebuild_confidence_bars(n_classes)
+                self._rebuild_confidence_bars(n_classes, dataset_name)
 
-            # Update prediction label
-            self.prediction_label.config(text=f"Predicted Class: {prediction}")
+            # Update prediction label with meaningful class name
+            self.prediction_label.config(text=f"Predicted: {class_name}")
 
             # Update confidence bars
             for i in range(n_classes):
@@ -1131,7 +1153,7 @@ Dataset path: {folder_path}"""
         filepath = os.path.join(self.models_dir, filename)
         
         try:
-            self.network.save_model(filepath)
+            self.network.save_model(filepath, dataset_name=self.dataset_name)
             messagebox.showinfo("Success", f"Model saved as: {filename}")
             self.refresh_model_list()  # Refresh model list in inference tab
         except Exception as e:

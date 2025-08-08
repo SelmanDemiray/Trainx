@@ -106,14 +106,15 @@ class NeuralNetwork:
         true_labels = np.argmax(labels, axis=0)
         return 1.0 - np.mean(predictions == true_labels)
     
-    def save_model(self, filepath):
+    def save_model(self, filepath, dataset_name="unknown"):
         """Save model parameters."""
         np.savez(filepath, W0=self.W0, W1=self.W1, b0=self.b0, b1=self.b1, 
-                num_classes=self.num_classes, input_size=self.input_size)
+                num_classes=self.num_classes, input_size=self.input_size,
+                dataset_name=dataset_name)
     
     def load_model(self, filepath):
         """Load model parameters."""
-        data = np.load(filepath)
+        data = np.load(filepath, allow_pickle=True)
         self.W0 = data['W0']
         self.W1 = data['W1']
         self.b0 = data['b0']
@@ -129,7 +130,10 @@ class NeuralNetwork:
             self.input_size = int(data['input_size'])
         else:
             self.input_size = self.W0.shape[1]
-        
+            
+        # Load dataset name if available
+        self.dataset_name = str(data.get('dataset_name', "unknown"))
+    
     def predict(self, images):
         """
         Predict classes for input images.
