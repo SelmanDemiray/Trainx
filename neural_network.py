@@ -2,18 +2,20 @@ import numpy as np
 from sigmoid import sigmoid
 
 class NeuralNetwork:
-    def __init__(self, nhid=10000, learning_rate=0.01, momentum=0.001, weight_decay=0.0001):
+    def __init__(self, nhid=10000, num_classes=10, input_size=784, learning_rate=0.01, momentum=0.001, weight_decay=0.0001):
         self.nhid = nhid
         self.learning_rate = learning_rate
         self.momentum = momentum
         self.weight_decay = weight_decay
+        self.num_classes = num_classes
+        self.input_size = input_size
         
-        # Initialize weights and biases - using Xavier/Glorot initialization for better convergence
-        sigma = np.sqrt(1.0 / 784)  # Xavier initialization for better starting point
-        self.W0 = np.random.randn(nhid, 784) * sigma
-        self.W1 = np.random.randn(10, nhid) * sigma
-        self.b0 = np.zeros((nhid, 1))  # Initialize biases to zero
-        self.b1 = np.zeros((10, 1))
+        # Initialize weights and biases with Xavier/Glorot initialization
+        sigma = np.sqrt(1.0 / input_size)
+        self.W0 = np.random.randn(nhid, input_size) * sigma
+        self.W1 = np.random.randn(num_classes, nhid) * sigma
+        self.b0 = np.zeros((nhid, 1))
+        self.b1 = np.zeros((num_classes, 1))
         
         # Initialize momentum terms
         self.delta_W0 = np.zeros_like(self.W0)
@@ -106,7 +108,8 @@ class NeuralNetwork:
     
     def save_model(self, filepath):
         """Save model parameters."""
-        np.savez(filepath, W0=self.W0, W1=self.W1, b0=self.b0, b1=self.b1)
+        np.savez(filepath, W0=self.W0, W1=self.W1, b0=self.b0, b1=self.b1, 
+                num_classes=self.num_classes, input_size=self.input_size)
     
     def load_model(self, filepath):
         """Load model parameters."""
@@ -115,9 +118,17 @@ class NeuralNetwork:
         self.W1 = data['W1']
         self.b0 = data['b0']
         self.b1 = data['b1']
-        self.W1 = data['W1']
-        self.b0 = data['b0']
-        self.b1 = data['b1']
+        
+        # Handle models saved with or without dimension information
+        if 'num_classes' in data:
+            self.num_classes = int(data['num_classes'])
+        else:
+            self.num_classes = self.W1.shape[0]
+            
+        if 'input_size' in data:
+            self.input_size = int(data['input_size'])
+        else:
+            self.input_size = self.W0.shape[1]
         
     def predict(self, images):
         """
@@ -153,8 +164,8 @@ class NeuralNetwork:
             prediction: Predicted class label
             probabilities: Output probabilities for each class
         """
-        if image.shape != (784,):
-            raise ValueError(f"Image must be flattened to 784 features, got {image.shape}")
+        if image.shape != (self.input_size,):
+            raise ValueError(f"Image must be flattened to {self.input_size} features, got {image.shape}")
         
         predictions, probabilities = self.predict(image.reshape(-1, 1))
         return predictions[0], probabilities[:, 0]

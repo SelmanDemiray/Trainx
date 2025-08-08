@@ -12,14 +12,16 @@ class InferenceModel:
         self.W1 = model_data['W1']
         self.b0 = model_data['b0']
         self.b1 = model_data['b1']
-        self.architecture = model_data['architecture']
+        self.architecture = model_data.get('architecture', {})
+        self.input_size = int(self.architecture.get('input_size', self.W0.shape[1]))
+        self.output_size = int(self.architecture.get('output_size', self.W1.shape[0]))
     
     def predict(self, images):
         """
         Predict classes for input images.
         
         Args:
-            images: Input images as numpy array (784 x n_samples)
+            images: Input images as numpy array (input_size x n_samples)
             
         Returns:
             predictions: Predicted class labels
@@ -40,8 +42,8 @@ class InferenceModel:
     
     def predict_single(self, image):
         """Predict class for a single image."""
-        if image.shape != (784,):
-            raise ValueError(f"Image must be flattened to 784 features, got {image.shape}")
+        if image.shape != (self.input_size,):
+            raise ValueError(f"Image must be flattened to {self.input_size} features, got {image.shape}")
         
         predictions, probabilities = self.predict(image.reshape(-1, 1))
         return predictions[0], probabilities[:, 0]

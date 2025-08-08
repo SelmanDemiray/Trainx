@@ -72,27 +72,42 @@ def show_weights(weights, fig=None, ax=None):
 
 def show_sample_images(images, labels, fig=None, ax=None):
     """Display sample images from each class."""
+    n_classes = int(labels.shape[0])
+    # Choose samples per class conservatively for large class counts
+    samples_per_class = 10 if n_classes <= 20 else (5 if n_classes <= 50 else 3)
+
     if fig is None and ax is None:
-        fig, axes = plt.subplots(10, 10, figsize=(10, 10), facecolor='#2d2d2d')
+        fig, axes = plt.subplots(n_classes, samples_per_class, figsize=(samples_per_class, n_classes), facecolor='#2d2d2d')
     else:
         axes = ax
-    
-    # Get 10 samples from each class
-    for digit in range(10):
-        digit_indices = np.where(np.argmax(labels, axis=0) == digit)[0]
-        if len(digit_indices) >= 10:
-            selected_indices = np.random.choice(digit_indices, 10, replace=False)
+
+    # Ensure axes is 2D for consistent indexing
+    if n_classes == 1:
+        axes = np.array([axes])
+    if samples_per_class == 1:
+        axes = np.expand_dims(axes, axis=1)
+
+    true_labels = np.argmax(labels, axis=0)
+
+    for c in range(n_classes):
+        class_indices = np.where(true_labels == c)[0]
+        if len(class_indices) >= samples_per_class:
+            selected_indices = np.random.choice(class_indices, samples_per_class, replace=False)
         else:
-            selected_indices = digit_indices
-            
-        for i in range(min(10, len(selected_indices))):
+            selected_indices = class_indices
+
+        for i in range(min(samples_per_class, len(selected_indices))):
             image = images[:, selected_indices[i]].reshape(28, 28)
-            axes[digit, i].imshow(image, cmap='viridis')
-            axes[digit, i].axis('off')
-    
+            axes[c, i].imshow(image, cmap='viridis')
+            axes[c, i].axis('off')
+
+        # Hide any remaining cells in this row
+        for i in range(len(selected_indices), samples_per_class):
+            axes[c, i].axis('off')
+
     plt.suptitle('Sample Images from Each Class', color='white')
     plt.tight_layout()
-    
+
     if fig is None and ax is None:
         plt.show()
     return fig
@@ -129,43 +144,37 @@ def plot_training_curves(train_losses, test_errors, fig=None, ax=None):
 def plot_confusion_matrix(predictions, labels, fig=None, ax=None):
     """Plot confusion matrix for model predictions."""
     true_labels = np.argmax(labels, axis=0)
-    
+    n_classes = int(labels.shape[0]) if labels is not None else int(max(predictions.max(), true_labels.max()) + 1)
+
     if SKLEARN_AVAILABLE:
-        cm = confusion_matrix(true_labels, predictions)
+        cm = confusion_matrix(true_labels, predictions, labels=list(range(n_classes)))
     else:
-        # Manual calculation of confusion matrix
-        cm = np.zeros((10, 10), dtype=int)
+        cm = np.zeros((n_classes, n_classes), dtype=int)
         for i in range(len(true_labels)):
             cm[true_labels[i], predictions[i]] += 1
-    
+
     if fig is None and ax is None:
         fig, ax = plt.subplots(figsize=(8, 8), facecolor='#2d2d2d')
-    
-    # Use seaborn's heatmap if available, otherwise use matplotlib
+
     if SEABORN_AVAILABLE:
-        sns.heatmap(cm, annot=True, fmt="d", cmap="viridis", ax=ax, cbar=True)
+        sns.heatmap(cm, annot=True, fmt="d", cmap="viridis", ax=ax, cbar=True,
+                    xticklabels=list(range(n_classes)), yticklabels=list(range(n_classes)))
     else:
-        # Fallback to matplotlib
         cax = ax.matshow(cm, cmap='viridis')
         fig.colorbar(cax)
-        
-        # Add text annotations
         for i in range(cm.shape[0]):
             for j in range(cm.shape[1]):
                 ax.text(j, i, str(cm[i, j]), ha='center', va='center', color='white')
-    
+        ax.set_xticks(np.arange(n_classes))
+        ax.set_yticks(np.arange(n_classes))
+        ax.set_xticklabels(np.arange(n_classes))
+        ax.set_yticklabels(np.arange(n_classes))
+
     ax.set_title('Confusion Matrix', color='white')
     ax.set_xlabel('Predicted Labels', color='white')
     ax.set_ylabel('True Labels', color='white')
     ax.tick_params(colors='white')
-    
-    # Set ticks for both axes if using matplotlib fallback
-    if not SEABORN_AVAILABLE:
-        ax.set_xticks(np.arange(10))
-        ax.set_yticks(np.arange(10))
-        ax.set_xticklabels(np.arange(10))
-        ax.set_yticklabels(np.arange(10))
-    
+
     if fig is None and ax is None:
         plt.show()
     return fig
@@ -173,29 +182,29 @@ def plot_confusion_matrix(predictions, labels, fig=None, ax=None):
 def plot_per_class_accuracy(predictions, labels, fig=None, ax=None):
     """Plot accuracy per class."""
     true_labels = np.argmax(labels, axis=0)
-    
-    # Calculate per-class accuracy
+    n_classes = int(labels.shape[0])
+
     class_accuracy = []
-    for c in range(10):
+    for c in range(n_classes):
         class_indices = np.where(true_labels == c)[0]
-        correct = np.sum(predictions[class_indices] == c)
+        correct = np.sum(predictions[class_indices] == c) if len(class_indices) > 0 else 0
         accuracy = correct / len(class_indices) if len(class_indices) > 0 else 0
         class_accuracy.append(accuracy * 100)
-    
+
     if fig is None and ax is None:
-        fig, ax = plt.subplots(figsize=(10, 5), facecolor='#2d2d2d')
-    
-    ax.bar(range(10), class_accuracy, color='#00aaff')
+        fig, ax = plt.subplots(figsize=(max(10, n_classes * 0.5), 5), facecolor='#2d2d2d')
+
+    ax.bar(range(n_classes), class_accuracy, color='#00aaff')
     ax.set_title('Accuracy per Class', color='white')
     ax.set_xlabel('Class', color='white')
     ax.set_ylabel('Accuracy (%)', color='white')
-    ax.set_xticks(range(10))
+    ax.set_xticks(range(n_classes))
     ax.tick_params(colors='white')
     ax.grid(True, axis='y', color='#555555')
-    
+
     for i, acc in enumerate(class_accuracy):
         ax.text(i, acc + 1, f"{acc:.1f}%", ha='center', color='white')
-    
+
     if fig is None and ax is None:
         plt.show()
     return fig

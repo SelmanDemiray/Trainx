@@ -8,13 +8,17 @@ import os
 import pickle
 import datetime
 from PIL import Image, ImageTk
-from data_loader import load_mnist_data
+from data_loader import (
+    load_mnist_data, load_emnist_data, load_cifar10_data, load_cifar100_data, 
+    get_emnist_classes
+)
 from neural_network import NeuralNetwork
 from visualization import (
     show_weights, show_sample_images, plot_training_curves,
     plot_confusion_matrix, plot_per_class_accuracy, plot_activation_distribution
 )
 from image_processor import process_image_for_inference
+from dataset_downloader import DatasetDownloader
 
 class DarkTheme:
     """Dark theme color scheme for the application."""
@@ -54,6 +58,8 @@ class NeuralNetworkGUI:
         # For inference
         self.current_image = None
         self.processed_image = None
+        # Store confidence container for dynamic rebuild
+        self.confidence_container = None
         
         self.apply_dark_theme()
         self.setup_gui()
@@ -145,13 +151,48 @@ class NeuralNetworkGUI:
         self.setup_inference_tab(inference_frame)
     
     def setup_data_tab(self, parent):
-        # Dataset loading section
-        ttk.Label(parent, text="Dataset Loading", font=('Arial', 12, 'bold')).pack(pady=10)
+        # Dataset selection and downloading
+        ttk.Label(parent, text="Dataset Selection", font=('Arial', 12, 'bold')).pack(pady=10)
+        
+        # Dataset selection frame
+        selection_frame = ttk.Frame(parent)
+        selection_frame.pack(pady=5, fill=tk.X)
+        
+        # Dataset type dropdown
+        ttk.Label(selection_frame, text="Dataset:").pack(side=tk.LEFT, padx=5)
+        self.dataset_var = tk.StringVar(value="mnist")
+        dataset_combo = ttk.Combobox(selection_frame, textvariable=self.dataset_var, 
+                                width=15, state="readonly")
+        dataset_combo['values'] = ('mnist', 
+                                 'emnist-letters', 'emnist-digits', 'emnist-balanced', 
+                                 'emnist-byclass', 'emnist-bymerge',
+                                 'cifar10', 'cifar100', 'cifar100-coarse')
+        dataset_combo.pack(side=tk.LEFT, padx=5)
+        
+        # Download button
+        self.download_btn = ttk.Button(selection_frame, text="Download Dataset", 
+                                     command=self.download_dataset)
+        self.download_btn.pack(side=tk.LEFT, padx=5)
+        
+        # Progress bar for download
+        self.download_progress = ttk.Progressbar(parent, mode='indeterminate')
+        self.download_progress.pack(fill=tk.X, padx=10, pady=5)
+        self.download_progress.pack_forget()  # Hide initially
+        
+        # Status label
+        self.download_status = ttk.Label(parent, text="")
+        self.download_status.pack(pady=5)
+        
+        # Add a separator
+        ttk.Separator(parent, orient='horizontal').pack(fill=tk.X, padx=10, pady=10)
+        
+        # Original data loading section
+        ttk.Label(parent, text="Load Existing Dataset", font=('Arial', 12, 'bold')).pack(pady=10)
         
         load_frame = ttk.Frame(parent)
         load_frame.pack(pady=10)
         
-        ttk.Button(load_frame, text="Select MNIST Dataset Folder", 
+        ttk.Button(load_frame, text="Select Dataset Folder", 
                   command=self.load_dataset).pack(side=tk.LEFT, padx=5)
         
         self.data_status = ttk.Label(parent, text="No dataset loaded")
@@ -163,6 +204,147 @@ class NeuralNetworkGUI:
         
         self.data_info = tk.Text(self.data_info_frame, height=10, width=60)
         self.data_info.pack(padx=10, pady=10)
+    
+    def download_dataset(self):
+        """Download the selected dataset."""
+        dataset = self.dataset_var.get()
+        self.download_btn.config(state='disabled')
+        self.download_progress.pack()
+        self.download_progress.start()
+        self.download_status.config(text=f"Starting download of {dataset}...")
+        
+        # Start download in a separate thread
+        threading.Thread(target=self._download_dataset_thread, 
+                        args=(dataset,), daemon=True).start()
+
+    def _download_dataset_thread(self, dataset):
+        """Background thread for dataset downloading."""
+        try:
+            downloader = DatasetDownloader()
+            
+            # Choose download function based on dataset
+            if dataset == 'mnist':
+                data_dir = downloader.download_mnist(callback=self._update_download_status)
+                self.root.after(0, lambda: self._load_downloaded_dataset(data_dir, 'mnist'))
+                
+            elif dataset.startswith('emnist-'):
+                emnist_type = dataset.split('-')[1]
+                try:
+                    data_dir = downloader.download_emnist(callback=self._update_download_status)
+                    self.root.after(0, lambda: self._load_downloaded_dataset(data_dir, 'emnist', emnist_type))
+                except FileNotFoundError as e:
+                    # Special handling for manual download situation
+                    self._update_download_status(str(e))
+                
+            elif dataset == 'cifar10':
+                data_dir = downloader.download_cifar10(callback=self._update_download_status)
+                self.root.after(0, lambda: self._load_downloaded_dataset(data_dir, 'cifar10'))
+                
+            elif dataset.startswith('cifar100'):
+                use_fine = not dataset.endswith('-coarse')
+                data_dir = downloader.download_cifar100(callback=self._update_download_status)
+                self.root.after(0, lambda: self._load_downloaded_dataset(data_dir, 'cifar100', use_fine_labels=use_fine))
+                
+        except Exception as e:
+            import traceback
+            error_msg = f"Download failed: {str(e)}\n{traceback.format_exc()}"
+            self.root.after(0, lambda: self._update_download_status(error_msg))
+        finally:
+            self.root.after(0, self._reset_download_ui)
+
+    def _update_download_status(self, message):
+        """Update download status message."""
+        # If message is multiline, make sure it fits in the UI
+        lines = message.split('\n')
+        if len(lines) > 1:
+            # Display with line breaks for readability
+            self.download_status.config(text=lines[0])
+            
+            # Log the full message
+            for line in lines:
+                self.log_message(line)
+        else:
+            self.download_status.config(text=message)
+
+    def _reset_download_ui(self):
+        """Reset the download UI elements."""
+        self.download_btn.config(state='normal')
+        self.download_progress.stop()
+        self.download_progress.pack_forget()
+
+    def _load_downloaded_dataset(self, data_dir, dataset_type, *args, **kwargs):
+        """Load a downloaded dataset."""
+        try:
+            self._update_download_status(f"Loading {dataset_type} dataset...")
+            
+            if dataset_type == 'mnist':
+                self.train_images, self.train_labels, self.test_images, self.test_labels = load_mnist_data(data_dir)
+                self.dataset_name = "mnist"
+                num_classes = 10
+                
+            elif dataset_type == 'emnist':
+                emnist_type = args[0] if args else 'letters'
+                self.train_images, self.train_labels, self.test_images, self.test_labels = load_emnist_data(data_dir, emnist_type)
+                self.dataset_name = f"emnist-{emnist_type}"
+                num_classes = get_emnist_classes(emnist_type)
+                
+            elif dataset_type == 'cifar10':
+                self.train_images, self.train_labels, self.test_images, self.test_labels = load_cifar10_data(data_dir)
+                self.dataset_name = "cifar10"
+                num_classes = 10
+                
+            elif dataset_type == 'cifar100':
+                use_fine = kwargs.get('use_fine_labels', True)
+                self.train_images, self.train_labels, self.test_images, self.test_labels = load_cifar100_data(data_dir, use_fine)
+                self.dataset_name = "cifar100" if use_fine else "cifar100-coarse"
+                num_classes = 100 if use_fine else 20
+            
+            # Update UI
+            self.data_status.config(text=f"Dataset loaded: {self.dataset_name}")
+            self._update_dataset_info()
+            
+            # Suggest network output size based on dataset
+            self.root.after(0, lambda: self._suggest_network_params(num_classes))
+            
+            self._update_download_status(f"{self.dataset_name} dataset ready!")
+            
+        except Exception as e:
+            import traceback
+            error_msg = f"Failed to load dataset: {str(e)}\n{traceback.format_exc()}"
+            self._update_download_status(error_msg)
+        finally:
+            self._reset_download_ui()
+
+    def _update_dataset_info(self):
+        """Update dataset information display."""
+        info = f"""Dataset: {self.dataset_name.upper()}
+Training Images: {self.train_images.shape[1]} samples, {self.train_images.shape[0]} features
+Training Labels: {self.train_labels.shape}
+Test Images: {self.test_images.shape[1]} samples, {self.test_images.shape[0]} features  
+Test Labels: {self.test_labels.shape}
+
+Image values: min={np.min(self.train_images):.3f}, max={np.max(self.train_images):.3f}
+Label verification: {np.all(np.sum(self.train_labels, axis=0) == 1.0)} (should be True)
+Number of classes: {self.train_labels.shape[0]}"""
+        
+        self.data_info.delete(1.0, tk.END)
+        self.data_info.insert(tk.END, info)
+
+    def _suggest_network_params(self, num_classes):
+        """Suggest network parameters based on loaded dataset."""
+        # Only update if the class count has changed
+        current_classes = 10
+        try:
+            current_classes = int(self.train_labels.shape[0])
+        except:
+            pass
+            
+        if num_classes != current_classes:
+            messagebox.showinfo(
+                "Dataset Loaded", 
+                f"The {self.dataset_name} dataset has {num_classes} classes.\n\n"
+                f"The network output layer will be automatically adjusted during training."
+            )
     
     def setup_training_tab(self, parent):
         # Hyperparameters
@@ -383,27 +565,41 @@ class NeuralNetworkGUI:
         # Confidence bars frame
         confidence_frame = ttk.LabelFrame(right_frame, text="Confidence Levels")
         confidence_frame.pack(fill=tk.BOTH, padx=5, pady=5)
-        
-        # Create progress bars for each digit
+
+        # Create progress bars container and build initially for 10 classes
+        self.confidence_container = confidence_frame
         self.confidence_bars = []
         self.confidence_labels = []
-        
-        for i in range(10):
-            digit_frame = ttk.Frame(confidence_frame)
-            digit_frame.pack(fill=tk.X, padx=5, pady=2)
-            
-            ttk.Label(digit_frame, text=f"Digit {i}:", width=8).pack(side=tk.LEFT)
-            
-            bar = ttk.Progressbar(digit_frame, length=200, maximum=100)
-            bar.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
-            self.confidence_bars.append(bar)
-            
-            label = ttk.Label(digit_frame, text="0%", width=6)
-            label.pack(side=tk.LEFT)
-            self.confidence_labels.append(label)
-        
+        self._rebuild_confidence_bars(10)
+
         # Initially refresh the model list
         self.refresh_model_list()
+
+    def _rebuild_confidence_bars(self, num_classes: int):
+        """Rebuild the confidence bars to match the number of classes."""
+        if self.confidence_container is None:
+            return
+
+        # Clear old bars
+        for child in self.confidence_container.winfo_children():
+            child.destroy()
+        self.confidence_bars = []
+        self.confidence_labels = []
+
+        # Build new bars
+        for i in range(num_classes):
+            row = ttk.Frame(self.confidence_container)
+            row.pack(fill=tk.X, padx=5, pady=2)
+
+            ttk.Label(row, text=f"Class {i}:", width=10).pack(side=tk.LEFT)
+
+            bar = ttk.Progressbar(row, length=200, maximum=100)
+            bar.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+            self.confidence_bars.append(bar)
+
+            label = ttk.Label(row, text="0%", width=6)
+            label.pack(side=tk.LEFT)
+            self.confidence_labels.append(label)
 
     def refresh_model_list(self):
         """Refresh the list of available models."""
@@ -449,7 +645,14 @@ class NeuralNetworkGUI:
                     
                 self.inference_model_info.insert(tk.END, model_info)
                 messagebox.showinfo("Success", f"Model '{model_name}' loaded successfully")
-                
+
+                # Rebuild confidence bars to match model's output classes
+                try:
+                    n_classes = int(self.network.W1.shape[0])
+                    self._rebuild_confidence_bars(n_classes)
+                except Exception:
+                    pass
+
                 # If an image is already loaded, predict again
                 if self.processed_image is not None:
                     self.predict_digit()
@@ -524,9 +727,9 @@ class NeuralNetworkGUI:
         self.current_image = None
         self.processed_image = None
         self.prediction_label.config(text="No prediction yet")
-        
-        # Reset confidence bars
-        for i in range(10):
+
+        # Reset confidence bars dynamically
+        for i in range(len(self.confidence_bars)):
             self.confidence_bars[i]['value'] = 0
             self.confidence_labels[i].config(text="0%")
     
@@ -543,16 +746,21 @@ class NeuralNetworkGUI:
         try:
             # Get prediction
             prediction, probabilities = self.network.predict_single(self.processed_image)
-            
+
+            # Rebuild bars if class count changed
+            n_classes = int(probabilities.shape[0])
+            if len(self.confidence_bars) != n_classes:
+                self._rebuild_confidence_bars(n_classes)
+
             # Update prediction label
-            self.prediction_label.config(text=f"Predicted Digit: {prediction}")
-            
+            self.prediction_label.config(text=f"Predicted Class: {prediction}")
+
             # Update confidence bars
-            for i in range(10):
-                confidence = probabilities[i] * 100
+            for i in range(n_classes):
+                confidence = float(probabilities[i]) * 100.0
                 self.confidence_bars[i]['value'] = confidence
                 self.confidence_labels[i].config(text=f"{confidence:.1f}%")
-                
+
         except Exception as e:
             messagebox.showerror("Error", f"Prediction failed: {str(e)}")
     
@@ -629,8 +837,19 @@ Dataset path: {folder_path}"""
             max_epochs = int(self.epochs_var.get())
             batch_size = int(self.batch_size_var.get())
             
-            # Create network
-            self.network = NeuralNetwork(nhid, lr, momentum, weight_decay)
+            # Determine input and output dimensions from data
+            input_size = self.train_images.shape[0]  # Features dimension
+            num_classes = self.train_labels.shape[0]  # Classes dimension
+            
+            # Create network with appropriate dimensions
+            self.network = NeuralNetwork(
+                nhid=nhid, 
+                num_classes=num_classes,
+                input_size=input_size,
+                learning_rate=lr, 
+                momentum=momentum, 
+                weight_decay=weight_decay
+            )
             
             # Training loop
             num_batches = self.train_images.shape[1] // batch_size
@@ -639,6 +858,7 @@ Dataset path: {folder_path}"""
             
             self.log_message("Starting training...")
             self.log_message(f"Network: {nhid} hidden units, {lr} learning rate")
+            self.log_message(f"Dataset: {self.dataset_name}, classes: {num_classes}, input size: {input_size}")
             
             for epoch in range(max_epochs):
                 if not self.training:
@@ -706,7 +926,26 @@ Dataset path: {folder_path}"""
         if self.train_images is None:
             messagebox.showerror("Error", "No dataset loaded")
             return
-        show_sample_images(self.train_images, self.train_labels)
+
+        n_classes = int(self.train_labels.shape[0])
+        samples_per_class = 10 if n_classes <= 20 else (5 if n_classes <= 50 else 3)
+
+        fig = plt.figure(figsize=(samples_per_class * 1.2, n_classes * 1.2), facecolor=DarkTheme.BG_COLOR)
+        fig.suptitle("Sample Images from Each Class", color="white", fontsize=16)
+
+        axes = []
+        for i in range(n_classes * samples_per_class):
+            ax = fig.add_subplot(n_classes, samples_per_class, i + 1)
+            ax.axis('off')
+            axes.append(ax)
+
+        fig = show_sample_images(
+            self.train_images,
+            self.train_labels,
+            fig=fig,
+            ax=np.array(axes).reshape(n_classes, samples_per_class)
+        )
+        self._setup_canvas(fig)
     
     def show_weights(self):
         if self.network is None:
@@ -752,19 +991,25 @@ Dataset path: {folder_path}"""
         if self.train_images is None:
             messagebox.showerror("Error", "No dataset loaded")
             return
-        
-        fig = plt.figure(figsize=(10, 10), facecolor=DarkTheme.BG_COLOR)
+
+        n_classes = int(self.train_labels.shape[0])
+        samples_per_class = 10 if n_classes <= 20 else (5 if n_classes <= 50 else 3)
+
+        fig = plt.figure(figsize=(samples_per_class * 1.2, n_classes * 1.2), facecolor=DarkTheme.BG_COLOR)
         fig.suptitle("Sample Images from Each Class", color="white", fontsize=16)
-        
-        # Create a grid of subplots
+
         axes = []
-        for i in range(10):
-            for j in range(10):
-                ax = fig.add_subplot(10, 10, i*10 + j + 1)
-                ax.axis('off')
-                axes.append(ax)
-        
-        fig = show_sample_images(self.train_images, self.train_labels, fig=fig, ax=np.array(axes).reshape(10, 10))
+        for i in range(n_classes * samples_per_class):
+            ax = fig.add_subplot(n_classes, samples_per_class, i + 1)
+            ax.axis('off')
+            axes.append(ax)
+
+        fig = show_sample_images(
+            self.train_images,
+            self.train_labels,
+            fig=fig,
+            ax=np.array(axes).reshape(n_classes, samples_per_class)
+        )
         self._setup_canvas(fig)
     
     def show_embedded_weights(self):
@@ -923,7 +1168,6 @@ Model file: {filepath}"""
         if self.network is None:
             messagebox.showerror("Error", "No trained network to export")
             return
-            
         filepath = filedialog.asksaveasfilename(
             defaultextension=".pkl",
             filetypes=[("Pickle files", "*.pkl"), ("All files", "*.*")]
@@ -936,17 +1180,14 @@ Model file: {filepath}"""
                     'b0': self.network.b0,
                     'b1': self.network.b1,
                     'architecture': {
-                        'input_size': 784,
-                        'hidden_size': self.network.nhid,
-                        'output_size': 10
+                        'input_size': int(self.network.input_size),
+                        'hidden_size': int(self.network.nhid),
+                        'output_size': int(self.network.num_classes)
                     }
                 }
-                
                 with open(filepath, 'wb') as f:
                     pickle.dump(export_data, f)
-                
                 messagebox.showinfo("Success", "Model exported for inference")
-                
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to export model: {str(e)}")
 
